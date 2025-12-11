@@ -6,10 +6,10 @@ WORKDIR /app
 # Copia package files
 COPY package*.json ./
 
-# Installa dipendenze
-RUN npm ci
+# Installa dipendenze (builder)
+RUN npm install
 
-# Copia sorgenti
+# Copia sorgenti TypeScript
 COPY tsconfig.json ./
 COPY src ./src
 
@@ -25,9 +25,10 @@ WORKDIR /app
 COPY package*.json ./
 
 # Installa solo dipendenze di produzione
-RUN npm ci --only=production && npm cache clean --force
+# (--omit=dev è l'equivalente moderno di --only=production)
+RUN npm install --omit=dev && npm cache clean --force
 
-# Copia build compilata
+# Copia build compilata dallo stage di build
 COPY --from=builder /app/dist ./dist
 
 # Imposta ambiente
@@ -42,3 +43,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Avvia server
 CMD ["node", "dist/server.js"]
+
