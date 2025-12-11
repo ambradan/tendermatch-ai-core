@@ -12,6 +12,6 @@ export const anthropicClient = new Anthropic({
   apiKey,
 });
 
-export const MODEL = "claude-sonnet-4-20250514";
+export const MODEL = "claude-sonnet-4-5-20250929";
 export const DEFAULT_MAX_TOKENS = 1500;
 export const DEFAULT_TEMPERATURE = 0.1;
