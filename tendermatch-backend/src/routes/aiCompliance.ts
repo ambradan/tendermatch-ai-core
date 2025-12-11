@@ -20,7 +20,7 @@ interface ComplianceCheckRequest {
   language?: string;
 }
 
-router.post("/ai-compliance-check", async (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   const startTime = Date.now();
   const { tenderId } = req.body as ComplianceCheckRequest;
   
