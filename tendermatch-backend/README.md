@@ -1,0 +1,246 @@
+# TenderMatch Backend
+
+Backend AI per TenderMatch - Analisi bandi di gara e compliance check.
+
+Questo servizio è progettato per essere **indipendente da Lovable**, utilizza direttamente l'API di Anthropic Claude, ed è pronto per il deploy su **Railway** tramite Docker.
+
+---
+
+## 🎯 Caratteristiche
+
+- **Privacy by Design**: nessun dato sensibile viene loggato
+- **Human-in-the-Loop**: l'AI fornisce analisi, l'utente decide
+- **Dockerizzato**: pronto per Railway, Render, Fly.io o qualsiasi servizio container
+- **TypeScript**: type-safe e manutenibile
+
+---
+
+## 📡 Endpoint Disponibili
+
+### `GET /health`
+
+Health check per verificare che il servizio sia attivo.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "service": "tendermatch-backend",
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+```
+
+---
+
+### `POST /api/tender-ready`
+
+Analizza un bando rispetto al profilo aziendale.
+
+**Request Body:**
+```json
+{
+  "companyProfile": "Descrizione dell'azienda, settore, certificazioni, fatturato...",
+  "tenderText": "Testo completo del bando di gara...",
+  "language": "italiano"
+}
+```
+
+**Response (successo):**
+```json
+{
+  "ok": true,
+  "data": "## 1. SINTESI DEL BANDO\n..."
+}
+```
+
+**Response (errore):**
+```json
+{
+  "ok": false,
+  "error": "Messaggio di errore"
+}
+```
+
+---
+
+### `POST /api/ai-compliance-check`
+
+Verifica la compliance documentale per una gara.
+
+**Request Body:**
+```json
+{
+  "tenderId": "GARA-2024-001",
+  "documents": [
+    {
+      "name": "Visura Camerale",
+      "type": "documento_legale",
+      "summary": "Visura camerale aggiornata al 2024, capitale sociale 100.000€..."
+    },
+    {
+      "name": "Certificazione ISO 9001",
+      "type": "certificazione",
+      "summary": "Certificazione ISO 9001:2015 valida fino al 2026..."
+    }
+  ],
+  "language": "italiano"
+}
+```
+
+**Response (successo):**
+```json
+{
+  "ok": true,
+  "data": "## 1. PANORAMICA DOCUMENTI ANALIZZATI\n..."
+}
+```
+
+---
+
+## ⚙️ Variabili di Ambiente
+
+| Variabile | Obbligatoria | Default | Descrizione |
+|-----------|--------------|---------|-------------|
+| `ANTHROPIC_API_KEY` | ✅ Sì | - | API Key di Anthropic |
+| `PORT` | No | `3000` | Porta del server |
+| `ALLOWED_ORIGINS` | No | `http://localhost:3000` | Origini CORS (comma-separated) |
+
+---
+
+## 🚀 Avvio Locale
+
+### 1. Clona e installa
+
+```bash
+git clone https://github.com/your-org/tendermatch-backend.git
+cd tendermatch-backend
+npm install
+```
+
+### 2. Configura ambiente
+
+```bash
+cp .env.example .env
+# Modifica .env con la tua ANTHROPIC_API_KEY
+```
+
+### 3. Avvia in development
+
+```bash
+npm run dev
+```
+
+Il server sarà disponibile su `http://localhost:3000`
+
+### 4. Test endpoint
+
+```bash
+# Health check
+curl http://localhost:3000/health
+
+# Tender Ready
+curl -X POST http://localhost:3000/api/tender-ready \
+  -H "Content-Type: application/json" \
+  -d '{
+    "companyProfile": "Azienda IT con 50 dipendenti, certificata ISO 27001",
+    "tenderText": "Bando per servizi IT, richiesta ISO 27001, fatturato minimo 1M€"
+  }'
+```
+
+---
+
+## 🏗️ Build
+
+```bash
+npm run build
+```
+
+Output in `./dist/`
+
+---
+
+## 🐳 Docker
+
+### Build immagine
+
+```bash
+docker build -t tendermatch-backend .
+```
+
+### Run container
+
+```bash
+docker run -p 3000:3000 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e ALLOWED_ORIGINS=https://tendermatch.lovable.app \
+  tendermatch-backend
+```
+
+### Con file .env
+
+```bash
+docker run -p 3000:3000 --env-file .env tendermatch-backend
+```
+
+---
+
+## 🚂 Deploy su Railway
+
+### 1. Collega Repository
+
+1. Vai su [Railway](https://railway.app)
+2. Crea nuovo progetto → "Deploy from GitHub repo"
+3. Seleziona il repository `tendermatch-backend`
+
+### 2. Configura Variabili
+
+Nel pannello Railway → Variables, aggiungi:
+
+- `ANTHROPIC_API_KEY` = la tua chiave Anthropic
+- `ALLOWED_ORIGINS` = `https://tendermatch.lovable.app,https://tuodominio.it`
+
+### 3. Deploy
+
+Railway rileverà automaticamente il `Dockerfile` e farà build + deploy.
+
+L'URL sarà qualcosa come: `https://tendermatch-backend-production.up.railway.app`
+
+### 4. Integrazione con Frontend Lovable
+
+Dal frontend TenderMatch su Lovable, chiama:
+
+```typescript
+const BACKEND_URL = "https://tendermatch-backend-production.up.railway.app";
+
+// Tender Ready
+const response = await fetch(`${BACKEND_URL}/api/tender-ready`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    companyProfile: "...",
+    tenderText: "..."
+  })
+});
+
+const result = await response.json();
+if (result.ok) {
+  console.log(result.data);
+} else {
+  console.error(result.error);
+}
+```
+
+---
+
+## 🔒 Sicurezza
+
+- **API Key**: mai loggata, mai esposta
+- **Dati sensibili**: solo timestamp, endpoint e tenderId nei log
+- **CORS**: whitelist esplicita delle origini permesse
+- **HTTPS**: gestito automaticamente da Railway
+
+---
+
+## 📝 Licenza
+
+Proprietario - TenderMatch © 2024
