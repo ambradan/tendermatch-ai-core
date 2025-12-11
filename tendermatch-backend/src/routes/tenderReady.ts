@@ -14,17 +14,22 @@ interface TenderReadyRequest {
   language?: string;
 }
 
+// NOTA: qui il path è "/" perché viene montato su "/api/tender-ready"
 router.post("/", async (req: Request, res: Response) => {
   const startTime = Date.now();
-  console.log(`[${new Date().toISOString()}] POST /api/tender-ready - Inizio elaborazione`);
+  console.log(
+    `[${new Date().toISOString()}] POST /api/tender-ready - Inizio elaborazione`
+  );
 
   try {
-    const { companyProfile, tenderText, language = "italiano" } = req.body as TenderReadyRequest;
+    const { companyProfile, tenderText, language = "italiano" } =
+      req.body as TenderReadyRequest;
 
     if (!companyProfile || !tenderText) {
       return res.status(400).json({
         ok: false,
-        error: "Campi obbligatori mancanti: companyProfile e tenderText sono richiesti",
+        error:
+          "Campi obbligatori mancanti: companyProfile e tenderText sono richiesti",
       });
     }
 
@@ -32,31 +37,7 @@ router.post("/", async (req: Request, res: Response) => {
 
 Il tuo compito è analizzare il profilo aziendale fornito e confrontarlo con i requisiti del bando, producendo un'analisi strutturata e actionable.
 
-Rispondi sempre in ${language}.
-
-FORMATO OUTPUT RICHIESTO:
-Produci un'analisi strutturata con le seguenti sezioni:
-
-## 1. SINTESI DEL BANDO
-[Breve riassunto del bando: oggetto, ente appaltante, importo se indicato, scadenze chiave]
-
-## 2. REQUISITI OBBLIGATORI
-[Lista puntata dei requisiti minimi di partecipazione]
-
-## 3. GAP ANALYSIS
-[Confronto tra profilo aziendale e requisiti. Evidenzia:
-- ✅ Requisiti soddisfatti
-- ⚠️ Requisiti parzialmente soddisfatti
-- ❌ Requisiti non soddisfatti o non verificabili]
-
-## 4. AZIONI CONSIGLIATE
-[Lista numerata di azioni operative concrete da intraprendere, ordinate per priorità]
-
-## 5. PUNTEGGIO DI ALLINEAMENTO
-[Punteggio da 0 a 100 con breve giustificazione]
-
----
-Sii preciso, obiettivo e pratico. Non inventare informazioni non presenti nei dati forniti.`;
+Rispondi sempre in ${language}.`;
 
     const userPrompt = `PROFILO AZIENDA:
 ${companyProfile}
@@ -68,7 +49,7 @@ ${tenderText}
 
 ---
 
-Analizza il bando e valuta l'allineamento dell'azienda. Fornisci l'output nel formato richiesto.`;
+Analizza il bando e valuta l'allineamento dell'azienda. Fornisci l'output in modo chiaro e strutturato.`;
 
     const response = await anthropicClient.messages.create({
       model: MODEL,
@@ -83,11 +64,16 @@ Analizza il bando e valuta l'allineamento dell'azienda. Fornisci l'output nel fo
       ],
     });
 
-    const textContent = response.content.find((block) => block.type === "text");
-    const analysisText = textContent?.type === "text" ? textContent.text : "";
+    const textContent = response.content.find(
+      (block) => block.type === "text"
+    );
+    const analysisText =
+      textContent?.type === "text" ? textContent.text : "";
 
     const duration = Date.now() - startTime;
-    console.log(`[${new Date().toISOString()}] POST /api/tender-ready - Completato in ${duration}ms`);
+    console.log(
+      `[${new Date().toISOString()}] POST /api/tender-ready - Completato in ${duration}ms`
+    );
 
     return res.json({
       ok: true,
@@ -95,13 +81,17 @@ Analizza il bando e valuta l'allineamento dell'azienda. Fornisci l'output nel fo
     });
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error(`[${new Date().toISOString()}] POST /api/tender-ready - Errore dopo ${duration}ms:`, 
+    console.error(
+      `[${new Date().toISOString()}] POST /api/tender-ready - Errore dopo ${duration}ms:`,
       error instanceof Error ? error.message : "Errore sconosciuto"
     );
 
     return res.status(500).json({
       ok: false,
-      error: error instanceof Error ? error.message : "Errore durante l'elaborazione della richiesta",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Errore durante l'elaborazione della richiesta",
     });
   }
 });
