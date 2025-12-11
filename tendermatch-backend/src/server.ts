@@ -1,41 +1,43 @@
-import dotenv from "dotenv";
-dotenv.config();
-
 import express from "express";
 import cors from "cors";
+import dotenv from "dotenv";
 import tenderReadyRouter from "./routes/tenderReady";
 import aiComplianceRouter from "./routes/aiCompliance";
 
+dotenv.config();
+
 const app = express();
+
+// Porta
 const PORT = process.env.PORT || 3000;
 
-// Configurazione CORS
-const allowedOriginsEnv = process.env.ALLOWED_ORIGINS;
-const allowedOrigins = allowedOriginsEnv
-  ? allowedOriginsEnv.split(",").map((origin) => origin.trim())
-  : ["http://localhost:3000"];
+// CORS
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Permetti richieste senza origin (es. curl, Postman)
-      if (!origin) {
-        return callback(null, true);
-      }
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      console.warn(`[CORS] Origine bloccata: ${origin}`);
-      return callback(new Error("Non autorizzato da CORS policy"), false);
-    },
-    credentials: true,
-  })
-);
+if (allowedOrigins.length > 0) {
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        console.warn(`Origin non autorizzata: ${origin}`);
+        return callback(new Error("Not allowed by CORS"));
+      },
+      credentials: true,
+    })
+  );
+} else {
+  // Se non è configurato nulla, permetti tutto (utile per test)
+  app.use(cors());
+}
 
-// Parser JSON con limite 10MB per documenti corposi
 app.use(express.json({ limit: "10mb" }));
 
-// Health check endpoint
+// Healthcheck
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
@@ -44,42 +46,24 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// Mount routes
+// 🔗 QUI montiamo le route API
 app.use("/api", tenderReadyRouter);
 app.use("/api", aiComplianceRouter);
 
-// 404 handler
-app.use((_req, res) => {
+// 404 JSON per endpoint inesistenti
+app.use((req, res) => {
+  console.warn(`404 su ${req.method} ${req.path}`);
   res.status(404).json({
     ok: false,
     error: "Endpoint non trovato",
   });
 });
 
-// Error handler globale
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(`[${new Date().toISOString()}] Errore non gestito:`, err.message);
-  res.status(500).json({
-    ok: false,
-    error: "Errore interno del server",
-  });
+// Avvio server
+app.listen(PORT, () => {
+  console.log(
+    `[TenderMatch backend] Server avviato su porta ${PORT} (${process.env.NODE_ENV || "development"})`
+  );
 });
 
-app.listen(PORT, () => {
-  console.log(`
-╔═══════════════════════════════════════════════════════════╗
-║                                                           ║
-║   🚀 TenderMatch Backend avviato                          ║
-║                                                           ║
-║   Porta: ${String(PORT).padEnd(47)}║
-║   Ambiente: ${(process.env.NODE_ENV || "development").padEnd(44)}║
-║   CORS Origins: ${allowedOrigins.length} configurati${" ".repeat(32)}║
-║                                                           ║
-║   Endpoints disponibili:                                  ║
-║   • GET  /health                                          ║
-║   • POST /api/tender-ready                                ║
-║   • POST /api/ai-compliance-check                         ║
-║                                                           ║
-╚═══════════════════════════════════════════════════════════╝
-  `);
-});
+export default app;
