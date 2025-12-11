@@ -1,34 +1,44 @@
+// tendermatch-backend/src/server.ts
+
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+
 import tenderReadyRouter from "./routes/tenderReady";
 import aiComplianceRouter from "./routes/aiCompliance";
 
+// Carica le variabili d'ambiente (.env)
 dotenv.config();
 
+// Inizializza Express
 const app = express();
 
-// Porta
+// Porta di ascolto (Railway userà process.env.PORT)
 const PORT = process.env.PORT || 3000;
 
-// CORS configurazione corretta per Lovable + domini futuri
+/**
+ * CORS – configurazione PERMANENTE per:
+ * - il progetto Lovable attuale
+ * - tutti i sottodomini *.lovableproject.com
+ * - il futuro dominio tendermatch.it
+ */
 app.use(
   cors({
     origin: [
-      "https://f22ecf68-1ba3-484b-820f-d1e2a44e9548.lovableproject.com", // tuo progetto Lovable
-      /\.lovableproject\.com$/,                                         // tutti i sottodomini Lovable
-      "https://tendermatch.it",                                         // dominio produzione (futuro)
+      "https://f22ecf68-1ba3-484b-820f-d1e2a44e9548.lovableproject.com",
+      "https://tendermatch.it",
+      /\.lovableproject\.com$/, // qualunque sottodominio Lovable
     ],
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
+    credentials: false, // nessun cookie/sessione da condividere
   })
 );
 
-// Body parser JSON
+// Parser JSON per le richieste in ingresso
 app.use(express.json({ limit: "10mb" }));
 
-// Healthcheck
+// Endpoint di healthcheck (per Railway e test veloci)
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
@@ -37,11 +47,14 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// QUI montiamo le route API
+// 🔗 Montiamo le route API vere e proprie
+// /api/tender-ready  → router di analisi bando
 app.use("/api/tender-ready", tenderReadyRouter);
+
+// /api/ai-compliance-check → router di AI Compliance
 app.use("/api/ai-compliance-check", aiComplianceRouter);
 
-// 404 JSON per endpoint inesistenti
+// 404 JSON per tutte le altre route non esistenti
 app.use((req, res) => {
   console.warn(`404 su ${req.method} ${req.path}`);
   res.status(404).json({
@@ -50,9 +63,9 @@ app.use((req, res) => {
   });
 });
 
-// Avvio server (utile in locale; su Railway viene ignorato ma non dà fastidio)
+// Avvia il server (utile in locale; su Railway viene usato PORT)
 app.listen(PORT, () => {
-  console.log(`TenderMatch backend in ascolto su porta ${PORT}`);
+  console.log(`TenderMatch backend in ascolto sulla porta ${PORT}`);
 });
 
 export default app;
