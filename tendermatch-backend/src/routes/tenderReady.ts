@@ -14,7 +14,7 @@ interface TenderReadyRequest {
   language?: string;
 }
 
-router.post("/tender-ready", async (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   const startTime = Date.now();
   console.log(`[${new Date().toISOString()}] POST /api/tender-ready - Inizio elaborazione`);
 
