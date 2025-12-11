@@ -8,80 +8,96 @@ import {
 
 const router = Router();
 
-interface DocumentSummary {
+interface ComplianceDocument {
   name: string;
-  type: string;
-  summary: string;
+  type: string; // es: "certification", "policy", "procedure", ecc.
+  summary: string; // breve descrizione / testo rilevante
 }
 
 interface ComplianceCheckRequest {
   tenderId: string;
-  documents: DocumentSummary[];
+  documents: ComplianceDocument[];
   language?: string;
 }
 
+// NOTA: qui il path è "/" perché il router viene montato su "/api/ai-compliance-check"
 router.post("/", async (req: Request, res: Response) => {
   const startTime = Date.now();
-  const { tenderId } = req.body as ComplianceCheckRequest;
-  
-  console.log(`[${new Date().toISOString()}] POST /api/ai-compliance-check - TenderId: ${tenderId || "non specificato"}`);
+  console.log(
+    `[${new Date().toISOString()}] POST /api/ai-compliance-check - Inizio elaborazione`
+  );
 
   try {
-    const { documents, language = "italiano" } = req.body as ComplianceCheckRequest;
+    const {
+      tenderId,
+      documents,
+      language = "italiano",
+    } = req.body as ComplianceCheckRequest;
 
-    if (!tenderId || !documents || !Array.isArray(documents) || documents.length === 0) {
+    if (!tenderId || !Array.isArray(documents) || documents.length === 0) {
       return res.status(400).json({
         ok: false,
-        error: "Campi obbligatori mancanti: tenderId e documents (array non vuoto) sono richiesti",
+        error:
+          "Campi obbligatori mancanti: tenderId e almeno un documento in 'documents' sono richiesti",
       });
     }
 
-    const documentsFormatted = documents
-      .map(
-        (doc, index) =>
-          `### Documento ${index + 1}: ${doc.name}
-Tipo: ${doc.type}
-Contenuto riassunto: ${doc.summary}`
-      )
-      .join("\n\n");
+    const systemPrompt = `Sei TenderMatch AI Compliance, un motore AI specializzato nel verificare l'allineamento documentale delle aziende italiane rispetto ai requisiti di gara.
 
-    const systemPrompt = `Sei il modulo "AI Compliance Check" di TenderMatch, specializzato nell'analisi della conformità documentale per gare d'appalto.
-
-Il tuo compito è verificare se i documenti forniti dall'azienda soddisfano i requisiti di compliance tipici dei bandi di gara italiani.
+Il tuo compito è analizzare l'elenco dei documenti forniti (certificazioni, policy, procedure, ecc.) e produrre un'analisi strutturata della loro copertura rispetto ai requisiti tipici del bando.
 
 Rispondi sempre in ${language}.
 
-FORMATO OUTPUT RICHIESTO:
+FORMATTAZIONE DELL'OUTPUT:
 
-## 1. PANORAMICA DOCUMENTI ANALIZZATI
-[Elenco dei documenti ricevuti con valutazione rapida dello stato]
+## 1. CONTESTO
+- ID gara: {tenderId}
+- Descrizione sintetica del perimetro di verifica (es. sicurezza, qualità, privacy, continuità operativa)
 
-## 2. REQUISITI DI COMPLIANCE COPERTI
-[Lista dei requisiti normativi/amministrativi che risultano soddisfatti dalla documentazione presente]
-- ✅ [Requisito] - Coperto da: [Nome documento]
+## 2. DOCUMENTI ANALIZZATI
+[Elenco puntato con nome documento, tipo e ruolo nel perimetro di compliance]
 
-## 3. REQUISITI MANCANTI O CRITICI
-[Lista dei requisiti non coperti o parzialmente coperti]
-- ❌ [Requisito mancante] - Criticità: [Alta/Media/Bassa]
-- ⚠️ [Requisito parziale] - Problema: [descrizione]
+## 3. COPERTURA REQUISITI
+[Tabella o elenco strutturato con:
+- Requisito / ambito (es. ISO 27001, ISO 9001, gestione incidenti, GDPR, business continuity)
+- Documenti che lo coprono
+- Livello di copertura:
+    ✅ pienamente coperto
+    ⚠️ parzialmente coperto / da integrare
+    ❌ non coperto o non dimostrabile]
 
-## 4. AZIONI CORRETTIVE PROPOSTE
-[Lista numerata di azioni da intraprendere per raggiungere la compliance completa, ordinate per priorità]
+## 4. GAP E RACCOMANDAZIONI
+[Lista numerata dei principali gap con suggerimenti pratici:
+- che documento/procedura manca
+- se serve aggiornare qualcosa
+- cosa sarebbe opportuno produrre prima di partecipare alla gara]
 
-## 5. PUNTEGGIO DI COMPLIANCE
-[Punteggio da 0 a 100 con giustificazione]
+## 5. VALUTAZIONE FINALE
+- Punteggio di compliance (0–100)
+- Breve commento conclusivo operativo
+
+Non inventare documenti che non sono stati forniti. Se qualcosa non è dimostrabile in base ai dati, dillo esplicitamente.`;
+
+    const docsAsText = documents
+      .map(
+        (doc, index) =>
+          `# Documento ${index + 1}
+Nome: ${doc.name}
+Tipo: ${doc.type}
+Contenuto / Riassunto:
+${doc.summary}`
+      )
+      .join("\n\n");
+
+    const userPrompt = `Stai analizzando la documentazione fornita per la gara con ID: ${tenderId}.
+
+Di seguito trovi l'elenco strutturato dei documenti disponibili:
+
+${docsAsText}
 
 ---
-Basa l'analisi esclusivamente sui documenti forniti. Segnala chiaramente dove mancano informazioni.`;
 
-    const userPrompt = `RIFERIMENTO BANDO/TENDER: ${tenderId}
-
-DOCUMENTI DA ANALIZZARE:
-${documentsFormatted}
-
----
-
-Esegui l'analisi di compliance e fornisci l'output nel formato richiesto.`;
+Sulla base di questi documenti, produci l'analisi di compliance nel formato richiesto.`;
 
     const response = await anthropicClient.messages.create({
       model: MODEL,
@@ -96,11 +112,16 @@ Esegui l'analisi di compliance e fornisci l'output nel formato richiesto.`;
       ],
     });
 
-    const textContent = response.content.find((block) => block.type === "text");
-    const analysisText = textContent?.type === "text" ? textContent.text : "";
+    const textContent = response.content.find(
+      (block) => block.type === "text"
+    );
+    const analysisText =
+      textContent?.type === "text" ? textContent.text : "";
 
     const duration = Date.now() - startTime;
-    console.log(`[${new Date().toISOString()}] POST /api/ai-compliance-check - TenderId: ${tenderId} - Completato in ${duration}ms`);
+    console.log(
+      `[${new Date().toISOString()}] POST /api/ai-compliance-check - Completato in ${duration}ms`
+    );
 
     return res.json({
       ok: true,
@@ -109,13 +130,16 @@ Esegui l'analisi di compliance e fornisci l'output nel formato richiesto.`;
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error(
-      `[${new Date().toISOString()}] POST /api/ai-compliance-check - TenderId: ${tenderId || "N/A"} - Errore dopo ${duration}ms:`,
+      `[${new Date().toISOString()}] POST /api/ai-compliance-check - Errore dopo ${duration}ms:`,
       error instanceof Error ? error.message : "Errore sconosciuto"
     );
 
     return res.status(500).json({
       ok: false,
-      error: error instanceof Error ? error.message : "Errore durante l'analisi di compliance",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Errore durante l'elaborazione della richiesta",
     });
   }
 });
