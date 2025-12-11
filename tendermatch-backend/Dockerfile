@@ -25,7 +25,6 @@ WORKDIR /app
 COPY package*.json ./
 
 # Installa solo dipendenze di produzione
-# (--omit=dev è l'equivalente moderno di --only=production)
 RUN npm install --omit=dev && npm cache clean --force
 
 # Copia build compilata dallo stage di build
@@ -43,4 +42,3 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Avvia server
 CMD ["node", "dist/server.js"]
-
