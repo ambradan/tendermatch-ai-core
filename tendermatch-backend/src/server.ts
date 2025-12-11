@@ -11,29 +11,16 @@ const app = express();
 // Porta
 const PORT = process.env.PORT || 3000;
 
-// CORS
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
-  .split(",")
-  .map(o => o.trim())
-  .filter(Boolean);
-
-if (allowedOrigins.length > 0) {
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
-          return callback(null, true);
-        }
-        console.warn(`Origin non autorizzata: ${origin}`);
-        return callback(new Error("Not allowed by CORS"));
-      },
-      credentials: true,
-    })
-  );
-} else {
-  // Se non è configurato nulla, permetti tutto (utile per test)
-  app.use(cors());
-}
+// CORS configurazione corretta per Lovable + domini futuri
+app.use(cors({
+  origin: [
+    "https://f22ecf68-1ba3-484b-820f-d1e2a44e9548.lovableproject.com",  // il tuo frontend Lovable
+    /\.lovableproject\.com$/,                                          // tutti i sottodomini Lovable
+    "https://tendermatch.it"                                           // futuro dominio di produzione
+  ],
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 app.use(express.json({ limit: "10mb" }));
 
