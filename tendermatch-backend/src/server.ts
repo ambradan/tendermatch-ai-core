@@ -47,8 +47,8 @@ app.get("/health", (_req, res) => {
 });
 
 // 🔗 QUI montiamo le route API
-app.use("/api", tenderReadyRouter);
-app.use("/api", aiComplianceRouter);
+app.use("/api/tender-ready", tenderReadyRouter);
+app.use("/api/ai-compliance-check", aiComplianceRouter);
 
 // 404 JSON per endpoint inesistenti
 app.use((req, res) => {
