@@ -35,19 +35,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function estimateTokensFromParams(params: any): number {
-  // Stima veloce e robusta:
-  // - input: somma lunghezze di messages/content (stringhe o array blocks)
-  // - output: aggiunge max_tokens
-  const maxTokens = Number(params?.max_tokens ?? DEFAULT_MAX_TOKENS);
-
+/**
+ * Estrae testo "reale" dai messages (string o array blocks con .text)
+ * Nota: non logghiamo MAI il contenuto, solo lunghezze.
+ */
+function extractTextFromMessages(params: any): string {
   const messages = Array.isArray(params?.messages) ? params.messages : [];
-  const inputText = messages
+  return messages
     .map((m: any) => {
       const c = m?.content;
       if (typeof c === "string") return c;
       if (Array.isArray(c)) {
-        // supporto content in formato array (es. blocks)
         return c
           .map((b: any) => (typeof b?.text === "string" ? b.text : ""))
           .join(" ");
@@ -55,18 +53,48 @@ function estimateTokensFromParams(params: any): number {
       return "";
     })
     .join("\n");
+}
 
-  // ~4 chars per token + 10% margine
-  const inputTokens = Math.ceil(inputText.length * 0.25 * 1.1);
+function estimateTokensFromParams(params: any): number {
+  // Stima veloce e robusta:
+  // - input: somma lunghezze di messages/content (stringhe o array blocks)
+  // - output: aggiunge max_tokens
+  const maxTokens = Number(params?.max_tokens ?? DEFAULT_MAX_TOKENS);
+  const inputText = extractTextFromMessages(params);
 
-  // totale = input + output (max_tokens)
-  return inputTokens + maxTokens;
+  // Guard anti-base64 / input non testuale (non blocca, ma segnala)
+  const looksLikeBase64 =
+    /base64,|data:application\/pdf;base64/i.test(inputText) ||
+    /JVBERi0xL/i.test(inputText); // header tipico PDF in base64
+
+  if (looksLikeBase64) {
+    console.error(
+      "🚨 ALERT: inputText contiene pattern base64/data URI. Questo NON dovrebbe essere inviato come testo."
+    );
+  }
+
+  // Stima: ~4 chars ≈ 1 token (IT). + maxTokens (output)
+  // (manteniamo la tua euristica, ma la rendiamo leggibile/diagnosticabile)
+  const inputTokens = Math.ceil(inputText.length / 4);
+  const total = inputTokens + maxTokens;
+
+  // Diagnostica (senza contenuti sensibili)
+  console.log(
+    `📊 Token estimate: chars=${inputText.length}, inputTokens≈${inputTokens}, maxOutput=${maxTokens}, total≈${total}`
+  );
+
+  if (inputText.length > 500_000) {
+    console.error(
+      `🚨 ALERT: Input enorme (${inputText.length} chars). Possibili duplicazioni o estrazione errata.`
+    );
+  }
+
+  return total;
 }
 
 async function waitForRateLimit(estimatedTokens: number): Promise<void> {
-  const now = Date.now();
-
   // 1) min delay tra richieste
+  const now = Date.now();
   const sinceLast = now - lastReqAt;
   if (sinceLast < MIN_DELAY_MS) {
     const waitTime = MIN_DELAY_MS - sinceLast;
@@ -74,43 +102,57 @@ async function waitForRateLimit(estimatedTokens: number): Promise<void> {
     await sleep(waitTime);
   }
 
-  // 2) rolling window token budget
-  history = history.filter((r) => r.t > Date.now() - WINDOW_MS);
-  const used = history.reduce((s, r) => s + r.tokens, 0);
-
-  if (used + estimatedTokens > TOKEN_BUDGET_PER_MIN) {
-    const oldest = history[0];
-    if (oldest) {
-      const waitMs = oldest.t + WINDOW_MS - Date.now();
-      if (waitMs > 0) {
-        console.log(
-          `⏳ Token budget: waiting ${waitMs}ms (used: ${used}, requested: ${estimatedTokens})`
-        );
-        await sleep(waitMs);
-      }
-    }
+  // 2) se singola request supera il budget -> THROW (deve essere chunkata a monte)
+  if (estimatedTokens > TOKEN_BUDGET_PER_MIN) {
+    console.error(
+      `🚨 SINGLE REQUEST OVER BUDGET: estimated=${estimatedTokens} > limit=${TOKEN_BUDGET_PER_MIN}. Chunking required.`
+    );
+    throw new Error(
+      `Request too large for token budget (${estimatedTokens} > ${TOKEN_BUDGET_PER_MIN}). Chunking required.`
+    );
   }
 
-  lastReqAt = Date.now();
-  history.push({ t: Date.now(), tokens: estimatedTokens });
+  // 3) rolling window LOOP finché budget realmente disponibile
+  while (true) {
+    const cutoff = Date.now() - WINDOW_MS;
+    history = history.filter((r) => r.t > cutoff);
 
-  console.log(
-    `✅ Rate limit OK: ${estimatedTokens} tokens (total last 60s: ${used + estimatedTokens})`
-  );
+    const used = history.reduce((s, r) => s + r.tokens, 0);
+
+    if (used + estimatedTokens <= TOKEN_BUDGET_PER_MIN) {
+      // Budget OK: registra PRIMA di loggare "OK"
+      lastReqAt = Date.now();
+      history.push({ t: Date.now(), tokens: estimatedTokens });
+
+      console.log(
+        `✅ Rate limit OK: req=${estimatedTokens} (total last 60s=${used + estimatedTokens}/${TOKEN_BUDGET_PER_MIN})`
+      );
+      return;
+    }
+
+    // Budget superato: aspetta finché scade la finestra del record più vecchio
+    const oldest = history[0];
+    const waitMs = oldest
+      ? Math.max(1000, oldest.t + WINDOW_MS - Date.now())
+      : 60_000;
+
+    console.log(
+      `⏳ BUDGET EXCEEDED: used=${used}, req=${estimatedTokens}, limit=${TOKEN_BUDGET_PER_MIN}. waiting ${waitMs}ms`
+    );
+    await sleep(waitMs);
+  }
 }
 
 /**
- * Funzione generica di retry con exponential backoff.
- * Serve a gestire i rate_limit_error (429) di Anthropic
- * senza restituire subito errore 500 al frontend.
+ * Retry con exponential backoff su errore 429.
+ * Minimo 20s, backoff 2x (20s -> 40s -> 80s -> 160s)
  */
 export async function callAnthropicWithRetry<T>(
   fn: () => Promise<T>,
-  maxRetries = 3,
-  initialDelayMs = 1500
+  maxRetries = 4
 ): Promise<T> {
   let attempt = 0;
-  let delay = initialDelayMs;
+  let delay = 20_000;
 
   while (true) {
     try {
@@ -120,21 +162,19 @@ export async function callAnthropicWithRetry<T>(
         err?.status === 429 ||
         err?.code === 429 ||
         err?.error?.type === "rate_limit_error" ||
-        /rate limit/i.test(err?.message ?? "");
+        /rate.?limit/i.test(err?.message ?? "") ||
+        /rate.?limit/i.test(err?.error?.message ?? "");
 
       if (!isRateLimit || attempt >= maxRetries) {
-        // Non è un rate limit O abbiamo esaurito i retry -> rilanciamo
         throw err;
       }
 
       attempt += 1;
-
       console.warn(
         `⚠️ 429 Rate Limit. Retry ${attempt}/${maxRetries} in ${delay}ms`
       );
 
-      // Aspetta con exponential backoff (1.5s -> 3s -> 6s)
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      await sleep(delay);
       delay *= 2;
     }
   }
@@ -155,7 +195,7 @@ const rawMessagesCreate = baseClient.messages.create.bind(baseClient.messages);
  *
  * Tutto il resto del codice che fa:
  *   anthropicClient.messages.create({ ... })
- * continuerà a funzionare uguale, ma ora con guardrail lato server.
+ * continua a funzionare uguale, ma ora con guardrail lato server.
  */
 (baseClient.messages as any).create = async (params: any) => {
   const estimatedTokens = estimateTokensFromParams(params);
