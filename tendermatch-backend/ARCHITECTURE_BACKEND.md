@@ -6,6 +6,18 @@ This document provides a technical deep dive into the TenderMatch backend archit
 It complements the README by detailing system boundaries, data flows, security constraints,
 and scalability considerations.
 
+## Why This Architecture
+
+TenderMatch separates AI processing from presentation to achieve:
+
+| Goal | How |
+|------|-----|
+| Audit isolation | All scoring logic in single controlled backend |
+| Security boundary | AI credentials never exposed to browser |
+| Independent scaling | AI workloads scale separately from UI |
+| Vendor flexibility | LLM provider can change without frontend impact |
+
+Alternative considered: Edge Functions for AI. Rejected due to cold start latency, key exposure risk, and audit complexity.
 ---
 
 ## System Architecture (High Level)
