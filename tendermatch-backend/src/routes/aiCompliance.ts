@@ -1,17 +1,12 @@
 // tendermatch-backend/src/routes/aiCompliance.ts
 
 import { Router, Request, Response } from "express";
+import { generateComplianceOutput } from "../services/anthropicClient";
 import {
-  anthropicClient,
-  MODEL,
-  DEFAULT_MAX_TOKENS,
-  DEFAULT_TEMPERATURE,
-} from "../services/anthropicClient";
-import {
-  buildScorecard,
+  scoreCompliance,
   buildDegradedScorecard,
 } from "../services/scoring";
-import { RawChecksOutput, Scorecard } from "../types/scorecard";
+import { ComplianceScorecardV1 } from "../types/complianceScorecard";
 
 const router = Router();
 
@@ -27,7 +22,16 @@ interface ComplianceCheckRequest {
   language?: string;
 }
 
-// Helper per formattare brevemente i documenti
+// Pesi sezioni per compliance check
+const SECTION_WEIGHTS: Record<string, number> = {
+  requisiti_amministrativi: 0.25,
+  requisiti_tecnici: 0.30,
+  requisiti_economici: 0.20,
+  documentazione_generale: 0.15,
+  certificazioni: 0.10,
+};
+
+// Helper per formattare i documenti
 function buildDocumentsSummary(docs: ComplianceDocument[]): string {
   if (!docs || docs.length === 0) return "Nessun documento fornito.";
   return docs
@@ -37,59 +41,6 @@ function buildDocumentsSummary(docs: ComplianceDocument[]): string {
     )
     .join("\n\n");
 }
-
-// ============================================================
-// PROMPT TEMPLATES
-// ============================================================
-
-const SYSTEM_PROMPT_CHECKS = `Sei TenderMatch AI Compliance Engine, modulo di verifica conformità documentale.
-
-REGOLE ASSOLUTE:
-1. NON generare MAI numeri di scoring (vietati "36/100", "80%", percentuali, punteggi)
-2. Genera SOLO check discreti con status: PASS | PARTIAL | FAIL | ND
-3. Per ogni check fornisci evidence (snippet dal documento) e rationale (breve motivazione)
-4. Se non hai dati sufficienti per valutare, usa ND
-
-Rispondi SOLO con un JSON valido con questa struttura:
-{
-  "sections": [
-    {
-      "section_id": "requisiti_amministrativi",
-      "section_name": "Requisiti Amministrativi",
-      "checks": [
-        {
-          "id": "check_1",
-          "label": "Documento DURC presente",
-          "status": "PASS" | "PARTIAL" | "FAIL" | "ND",
-          "evidence": "snippet dal documento...",
-          "rationale": "motivazione breve"
-        }
-      ]
-    }
-  ]
-}
-
-Le sezioni da valutare per compliance documentale sono:
-- requisiti_amministrativi: DURC, visura camerale, casellario giudiziale, antimafia
-- requisiti_tecnici: CV referenti, attestazioni esperienza, portfolio progetti
-- requisiti_economici: bilanci, referenze bancarie, dichiarazioni fatturato
-- documentazione_generale: domanda partecipazione, dichiarazioni sostitutive, firme digitali
-- certificazioni: ISO 9001, ISO 27001, SOA, certificazioni settoriali`;
-
-const SYSTEM_PROMPT_REPORT = `Sei TenderMatch AI Compliance Engine, modulo di verifica conformità documentale.
-
-Genera un report in formato markdown chiaro e strutturato che includa:
-1. Sintesi della documentazione analizzata
-2. Requisiti di compliance coperti
-3. Gap documentali identificati
-4. Elementi critici o mancanti
-5. Raccomandazioni operative prioritizzate
-
-NON includere punteggi numerici nel report (verranno calcolati separatamente).`;
-
-// ============================================================
-// ROUTE HANDLER
-// ============================================================
 
 router.post("/", async (req: Request, res: Response) => {
   const startTime = Date.now();
@@ -104,7 +55,6 @@ router.post("/", async (req: Request, res: Response) => {
       language = "italiano",
     } = req.body as ComplianceCheckRequest;
 
-    // Validazioni base
     if (!tenderId || !documents || !Array.isArray(documents) || !documents.length) {
       return res.status(400).json({
         ok: false,
@@ -115,75 +65,28 @@ router.post("/", async (req: Request, res: Response) => {
 
     const docSummary = buildDocumentsSummary(documents);
 
-    const userPromptBase = `BANDO: ${tenderId}
+    const userPrompt = `BANDO: ${tenderId}
 
 DOCUMENTI PRESENTATI:
-${docSummary}
+${docSummary}`;
 
----
-
-Rispondi in ${language}.`;
-
-    // ============================================================
-    // CALL 1: Genera raw checks (JSON strutturato)
-    // ============================================================
-    let rawChecks: RawChecksOutput | null = null;
-    let scorecard: Scorecard;
-
-    try {
-      const checksResponse = await anthropicClient.messages.create({
-        model: MODEL,
-        max_tokens: DEFAULT_MAX_TOKENS,
-        temperature: DEFAULT_TEMPERATURE,
-        system: SYSTEM_PROMPT_CHECKS,
-        messages: [
-          {
-            role: "user",
-            content: userPromptBase + "\n\nGenera i check di compliance strutturati.",
-          },
-        ],
-      });
-
-      const checksText =
-        checksResponse.content.find((b) => b.type === "text")?.text ?? "";
-
-      // Parsing JSON (cerca il primo { ... } valido)
-      const jsonMatch = checksText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        rawChecks = JSON.parse(jsonMatch[0]) as RawChecksOutput;
-        scorecard = buildScorecard(rawChecks);
-      } else {
-        console.warn(
-          `[${new Date().toISOString()}] ai-compliance - Nessun JSON trovato nei checks`
-        );
-        scorecard = buildDegradedScorecard("Nessun JSON valido nell'output LLM");
-      }
-    } catch (parseErr) {
-      console.warn(
-        `[${new Date().toISOString()}] ai-compliance - Errore parsing checks:`,
-        parseErr instanceof Error ? parseErr.message : parseErr
-      );
-      scorecard = buildDegradedScorecard("Errore parsing output LLM");
-    }
-
-    // ============================================================
-    // CALL 2: Genera report markdown
-    // ============================================================
-    const reportResponse = await anthropicClient.messages.create({
-      model: MODEL,
-      max_tokens: DEFAULT_MAX_TOKENS,
-      temperature: DEFAULT_TEMPERATURE,
-      system: SYSTEM_PROMPT_REPORT + `\nRispondi in ${language}.`,
-      messages: [
-        {
-          role: "user",
-          content: userPromptBase,
-        },
-      ],
+    // Genera output compliance (dual-call: checks + report)
+    const { report_markdown, raw_checks } = await generateComplianceOutput({
+      userPrompt,
+      language,
     });
 
-    const reportMarkdown =
-      reportResponse.content.find((b) => b.type === "text")?.text ?? "";
+    // Calcola scorecard deterministico
+    let scorecard: ComplianceScorecardV1;
+
+    if (raw_checks.sections.length === 0) {
+      scorecard = buildDegradedScorecard("Output LLM non validabile");
+    } else {
+      scorecard = scoreCompliance({
+        sections: raw_checks.sections,
+        weights: SECTION_WEIGHTS,
+      });
+    }
 
     const duration = Date.now() - startTime;
     console.log(
@@ -192,7 +95,7 @@ Rispondi in ${language}.`;
 
     return res.json({
       ok: true,
-      data: reportMarkdown,
+      data: report_markdown,
       scorecard,
     });
   } catch (error) {
