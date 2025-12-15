@@ -1,73 +1,106 @@
-# Welcome to your Lovable project
+# TenderMatch
 
-## Project info
+AI-powered compliance analysis platform for Italian public procurement.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Architecture Overview
 
-## How can I edit this code?
+TenderMatch implements a strict separation between AI processing and presentation layers.
 
-There are several ways of editing your application.
+| Layer | Technology | Responsibility |
+|-------|------------|----------------|
+| Frontend | React / Vite | UI, PDF rendering, user interaction |
+| AI Backend | Node.js on Railway | All AI inference, compliance scoring |
+| Data Layer | Supabase | Authentication, storage, persistence |
 
-**Use Lovable**
+**Key design decision:** AI workloads run exclusively on a dedicated backend infrastructure. This separation enables independent scaling, audit isolation, and clear security boundaries.
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+No AI inference logic is deployed on Supabase in production.
 
-Changes made via Lovable will be committed automatically to this repo.
+## AI Engine Design
 
-**Use your preferred IDE**
+All AI processing is handled by a dedicated Railway backend.
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+**What the backend does:**
+- Integrates with Claude API for document analysis
+- Executes deterministic compliance scoring
+- Produces structured output contracts
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+**What the backend does NOT do:**
+- Render UI components
+- Generate PDFs
+- Store user sessions
 
-Follow these steps:
+**What the frontend does NOT do:**
+- Execute AI inference
+- Calculate compliance scores
+- Interpret raw LLM output
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+This boundary is enforced by design, not convention.
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## Data Flow & Contracts
 
-# Step 3: Install the necessary dependencies.
-npm i
+Every AI operation produces two outputs:
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
+| Output | Type | Consumer |
+|--------|------|----------|
+| report_markdown | string | Human-readable display |
+| scorecard | JSON (Compliance Scorecard v1) | Programmatic consumption, audit |
 
-**Edit a file directly in GitHub**
+**Contract guarantees:**
+- Scorecard schema is versioned (compliance-scorecard-v1)
+- Scoring formula is versioned independently (score-formula-v1)
+- Backend is single source of truth for all numeric scores
+- Frontend never parses markdown to extract scores
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+**PDF Generation:**
+PDF export is a frontend responsibility. The backend provides data; the frontend renders documents. This ensures UI-level control and eliminates backend coupling for presentation concerns.
 
-**Use GitHub Codespaces**
+## Security & Compliance Considerations
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+**API Key Isolation:**
+- Anthropic API keys are stored only in Railway environment
+- Frontend has no access to AI provider credentials
+- Supabase handles auth tokens separately
 
-## What technologies are used for this project?
+**Audit Trail:**
+- Every compliance check produces a versioned scorecard
+- Schema version enables backward-compatible evolution
+- No implicit score derivation from unstructured text
 
-This project is built with:
+**Data Flow:**
+- Documents are processed client-side for text extraction
+- Only extracted text is sent to backend (no raw file upload to AI layer)
+- User data persistence is isolated in Supabase
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## Runtime Configuration
 
-## How can I deploy this project?
+| Variable | Required | Scope | Purpose |
+|----------|----------|-------|---------|
+| VITE_TENDERMATCH_BACKEND_URL | Yes | Frontend | Railway backend endpoint |
+| VITE_SUPABASE_URL | Yes | Frontend | Supabase project URL |
+| VITE_SUPABASE_ANON_KEY | Yes | Frontend | Supabase public key |
+| ANTHROPIC_API_KEY | Yes | Backend (Railway env) | Claude API access |
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+Environment variables are injected at build time (Vite).
 
-## Can I connect a custom domain to my Lovable project?
+**Failure behavior:**
+- Missing VITE_TENDERMATCH_BACKEND_URL: AI features fail with explicit error
+- No silent fallback to alternative endpoints
+- Console warnings indicate misconfiguration
 
-Yes, you can!
+## Tech Stack
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+- **Frontend:** React, TypeScript, Vite, Tailwind CSS
+- **AI Backend:** Node.js, Express, TypeScript (Railway)
+- **Database & Auth:** Supabase (PostgreSQL, Auth, Storage)
+- **AI Provider:** Anthropic Claude API
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+## Deployment
+
+Frontend is deployed via Lovable publish. Backend is deployed on Railway with automatic scaling.
+
+To deploy frontend:
+1. Open [Lovable](https://lovable.dev/projects/f22ecf68-1ba3-484b-820f-d1e2a44e9548)
+2. Click Share → Publish
+
+Custom domains can be configured in Project → Settings → Domains.
