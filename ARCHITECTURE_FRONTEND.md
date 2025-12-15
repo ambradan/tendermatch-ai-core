@@ -8,6 +8,19 @@ It does not describe AI inference or scoring logic.
 
 ---
 
+## Design Rationale
+
+The frontend is intentionally "thin" on business logic:
+
+| Constraint | Rationale |
+|------------|-----------|
+| No scoring | Single source of truth (backend) prevents inconsistencies |
+| No AI calls | Key isolation, audit trail integrity |
+| Client-side PDF | User control, no backend coupling for presentation |
+| Text extraction in browser | Privacy (documents never uploaded raw to AI layer) |
+
+---
+
 ## Frontend Overview
 
 TenderMatch frontend is a presentation and orchestration layer built to provide
