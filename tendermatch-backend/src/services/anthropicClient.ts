@@ -48,34 +48,62 @@ const SYSTEM_PROMPT_CHECKS = `Sei TenderMatch AI Compliance Engine.
 Il tuo compito è analizzare documenti e bandi per verificare la compliance.
 
 REGOLE ASSOLUTE:
-- NON generare MAI punteggi numerici (vietati "36/100", "80%", "rating", score)
+- NON generare MAI punteggi numerici (vietati "36/100", "80%", "rating", score, cifre, percentuali)
 - Produci SOLO checks discreti: PASS, PARTIAL, FAIL, ND
 - Ogni check deve avere evidence (snippet testuali) e rationale (spiegazione breve)
+
+STRUTTURA OUTPUT OBBLIGATORIA:
+L'output JSON DEVE contenere ESATTAMENTE queste 5 sezioni, sempre presenti, sempre in questo ordine:
+1. requisiti_amministrativi
+2. requisiti_tecnici
+3. requisiti_economici
+4. documentazione_generale
+5. certificazioni
+
+REGOLE VINCOLANTI:
+- Gli "id" delle sezioni DEVONO essere ESATTAMENTE quelli sopra (lowercase, con underscore)
+- È VIETATO creare sezioni extra o con nomi diversi
+- Se una sezione non ha elementi verificabili → "checks": []
+- Ogni sezione DEVE avere "id", "label" e "checks"
 
 OUTPUT RICHIESTO (JSON valido):
 {
   "sections": [
     {
-      "id": "section_id",
-      "label": "Nome Sezione",
-      "checks": [
-        {
-          "id": "check_id",
-          "result": "PASS|PARTIAL|FAIL|ND",
-          "evidence": ["snippet rilevante dal documento..."],
-          "rationale": "Breve spiegazione del risultato"
-        }
-      ]
+      "id": "requisiti_amministrativi",
+      "label": "Requisiti Amministrativi",
+      "checks": [...]
+    },
+    {
+      "id": "requisiti_tecnici",
+      "label": "Requisiti Tecnici",
+      "checks": [...]
+    },
+    {
+      "id": "requisiti_economici",
+      "label": "Requisiti Economici",
+      "checks": [...]
+    },
+    {
+      "id": "documentazione_generale",
+      "label": "Documentazione Generale",
+      "checks": [...]
+    },
+    {
+      "id": "certificazioni",
+      "label": "Certificazioni",
+      "checks": [...]
     }
   ]
 }
 
-SEZIONI STANDARD:
-- requisiti_amministrativi: documenti legali, certificazioni base
-- requisiti_tecnici: capacità tecniche, personale, attrezzature
-- requisiti_economici: fatturato, solidità finanziaria
-- documentazione_generale: completezza documentale
-- certificazioni: ISO, SOA, altre certificazioni specifiche
+Struttura di ogni check:
+{
+  "id": "check_id_univoco",
+  "result": "PASS" | "PARTIAL" | "FAIL" | "ND",
+  "evidence": ["snippet rilevante dal documento..."],
+  "rationale": "Breve spiegazione del risultato"
+}
 
 Rispondi SOLO con JSON valido, nessun testo aggiuntivo.`;
 
@@ -268,6 +296,17 @@ function extractText(response: Anthropic.Message): string {
 }
 
 /**
+ * Sezioni canoniche (ordine e ID vincolanti)
+ */
+const CANONICAL_SECTIONS = [
+  { id: "requisiti_amministrativi", label: "Requisiti Amministrativi" },
+  { id: "requisiti_tecnici", label: "Requisiti Tecnici" },
+  { id: "requisiti_economici", label: "Requisiti Economici" },
+  { id: "documentazione_generale", label: "Documentazione Generale" },
+  { id: "certificazioni", label: "Certificazioni" },
+] as const;
+
+/**
  * Parsing sicuro del JSON raw_checks
  */
 function parseRawChecks(text: string): RawChecksJson | null {
@@ -299,6 +338,39 @@ function parseRawChecks(text: string): RawChecksJson | null {
   }
 }
 
+/**
+ * Canonicalizza raw_checks: assicura 5 sezioni standard nell'ordine corretto
+ */
+function canonicalizeRawChecks(raw: RawChecksJson): RawChecksJson {
+  // Mappa sezioni esistenti per ID
+  const sectionMap = new Map<string, RawChecksSection>();
+  for (const section of raw.sections) {
+    sectionMap.set(section.id, section);
+  }
+
+  // Ricostruisci nell'ordine canonico
+  const canonicalSections: RawChecksSection[] = CANONICAL_SECTIONS.map(
+    (canonical) => {
+      const existing = sectionMap.get(canonical.id);
+      if (existing) {
+        return {
+          id: canonical.id,
+          label: existing.label || canonical.label,
+          checks: existing.checks || [],
+        };
+      }
+      // Sezione mancante: aggiungi vuota
+      return {
+        id: canonical.id,
+        label: canonical.label,
+        checks: [],
+      };
+    }
+  );
+
+  return { sections: canonicalSections };
+}
+
 interface GenerateComplianceParams {
   userPrompt: string;
   language?: string;
@@ -317,11 +389,11 @@ export async function generateComplianceOutput(
 ): Promise<LLMComplianceOutput> {
   const { userPrompt, language = "italiano" } = params;
 
-  // Call 1: raw_checks
+  // Call 1: raw_checks (temperature 0 per massimo determinismo)
   const checksResponse = await anthropicClient.messages.create({
     model: MODEL,
     max_tokens: DEFAULT_MAX_TOKENS,
-    temperature: 0.1, // Bassa per output deterministico
+    temperature: 0,
     system: SYSTEM_PROMPT_CHECKS,
     messages: [
       {
@@ -332,7 +404,17 @@ export async function generateComplianceOutput(
   });
 
   const checksText = extractText(checksResponse);
-  const rawChecks = parseRawChecks(checksText);
+  let rawChecks = parseRawChecks(checksText);
+
+  // Canonicalizza: assicura 5 sezioni standard
+  if (rawChecks) {
+    rawChecks = canonicalizeRawChecks(rawChecks);
+    console.log(
+      "[RAW_CHECKS]",
+      "sections=", rawChecks.sections.length,
+      "checks_total=", rawChecks.sections.reduce((s, x) => s + (x.checks?.length || 0), 0)
+    );
+  }
 
   // Call 2: report markdown
   const reportResponse = await anthropicClient.messages.create({
