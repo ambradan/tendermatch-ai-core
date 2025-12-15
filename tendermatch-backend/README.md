@@ -224,9 +224,9 @@ Production URL: `https://tendermatch-backend-production.up.railway.app`
 
 | Document | Description |
 |----------|-------------|
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | System boundaries and data flows |
+| [ARCHITECTURE.md](./ARCHITECTURE_BACKEND.md) | System boundaries and data flows |
 | [README_AI_OUTPUT_CONTRACT.md](./README_AI_OUTPUT_CONTRACT.md) | AI output contract specification |
-| [CHANGELOG.md](./CHANGELOG.md) | Version history |
+| [CHANGELOG.md](./CHANGELOG_AI_OUTPUT.md) | Version history |
 | [TECHNICAL_ROADMAP.md](./TECHNICAL_ROADMAP.md) | Technical roadmap |
 
 ---
