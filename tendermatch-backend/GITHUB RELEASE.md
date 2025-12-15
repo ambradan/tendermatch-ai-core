@@ -35,4 +35,4 @@ whenever possible.
 
 - System architecture and design decisions: [ARCHITECTURE_BACKEND.md](./ARCHITECTURE_BACKEND.md)
 - API behavior and output contracts: [README.md](./README.md)
-- Forward-looking technical direction: [TECHNICALROADMAP.md](./ROADMAP.md)
+- Forward-looking technical direction: [TECHNICAL ROADMAP.md](./TECHNICALROADMAP.md)
