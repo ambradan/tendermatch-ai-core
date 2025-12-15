@@ -42,6 +42,62 @@ function buildDocumentsSummary(docs: ComplianceDocument[]): string {
     .join("\n\n");
 }
 
+// Sinonimi comuni → ID canonici
+const SECTION_SYNONYMS: Record<string, string> = {
+  // requisiti_amministrativi
+  "amministrativi": "requisiti_amministrativi",
+  "amministrativo": "requisiti_amministrativi",
+  "req_amministrativi": "requisiti_amministrativi",
+  "requisiti amministrativi": "requisiti_amministrativi",
+  // requisiti_tecnici
+  "tecnici": "requisiti_tecnici",
+  "tecnico": "requisiti_tecnici",
+  "req_tecnici": "requisiti_tecnici",
+  "requisiti tecnici": "requisiti_tecnici",
+  // requisiti_economici
+  "economici": "requisiti_economici",
+  "economico": "requisiti_economici",
+  "req_economici": "requisiti_economici",
+  "requisiti economici": "requisiti_economici",
+  "finanziari": "requisiti_economici",
+  // documentazione_generale
+  "documentazione": "documentazione_generale",
+  "documenti": "documentazione_generale",
+  "doc_generale": "documentazione_generale",
+  "documentazione generale": "documentazione_generale",
+  // certificazioni
+  "certificazione": "certificazioni",
+  "cert": "certificazioni",
+  "iso": "certificazioni",
+  "soa": "certificazioni",
+};
+
+/**
+ * Normalizza ID sezione in snake_case e mappa sinonimi
+ */
+function normalizeSectionId(input: string): string {
+  // Converti in lowercase e snake_case
+  const normalized = input
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/-/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
+
+  // Cerca sinonimo
+  if (SECTION_SYNONYMS[normalized]) {
+    return SECTION_SYNONYMS[normalized];
+  }
+
+  // Cerca anche versione con spazi (per label)
+  const withSpaces = input.toLowerCase().trim();
+  if (SECTION_SYNONYMS[withSpaces]) {
+    return SECTION_SYNONYMS[withSpaces];
+  }
+
+  return normalized;
+}
+
 router.post("/", async (req: Request, res: Response) => {
   const startTime = Date.now();
   console.log(
@@ -82,10 +138,31 @@ ${docSummary}`;
     if (raw_checks.sections.length === 0) {
       scorecard = buildDegradedScorecard("Output LLM non validabile");
     } else {
-      scorecard = scoreCompliance({
-        sections: raw_checks.sections,
-        weights: SECTION_WEIGHTS,
-      });
+      // B1+B2: Normalizza ID e filtra solo sezioni con peso definito
+      const normalizedSections = raw_checks.sections
+        .map((section) => ({
+          ...section,
+          id: normalizeSectionId(section.id),
+        }))
+        .filter((section) => section.id in SECTION_WEIGHTS);
+
+      // B4: Log diagnostico
+      console.log(
+        "[SCORING]",
+        "sections_in=", raw_checks.sections.length,
+        "sections_used=", normalizedSections.length,
+        "ids_used=", normalizedSections.map((s) => s.id)
+      );
+
+      // B3: Fallback se nessuna sezione mappabile
+      if (normalizedSections.length === 0) {
+        scorecard = buildDegradedScorecard("Sezioni LLM non mappabili ai pesi");
+      } else {
+        scorecard = scoreCompliance({
+          sections: normalizedSections,
+          weights: SECTION_WEIGHTS,
+        });
+      }
     }
 
     const duration = Date.now() - startTime;
