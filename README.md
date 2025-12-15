@@ -99,6 +99,8 @@ Environment variables are injected at build time (Vite).
 
 Frontend is deployed via Lovable publish. Backend is deployed on Railway with automatic scaling.
 
+For system-level architecture and compliance logic, see the backend repository documentation.
+
 To deploy frontend:
 1. Open [Lovable](https://lovable.dev/projects/f22ecf68-1ba3-484b-820f-d1e2a44e9548)
 2. Click Share → Publish
