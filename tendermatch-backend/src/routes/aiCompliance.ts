@@ -98,6 +98,27 @@ function normalizeSectionId(input: string): string {
   return normalized;
 }
 
+/**
+ * Ordina documenti in modo deterministico:
+ * 1. type: "tender" prima di "company", poi altri in ordine alfabetico
+ * 2. name: localeCompare per ordinamento stabile
+ */
+function sortDocumentsDeterministic(docs: ComplianceDocument[]): ComplianceDocument[] {
+  const typeOrder = (type: string): number => {
+    const lower = type.toLowerCase();
+    if (lower === "tender") return 0;
+    if (lower === "company") return 1;
+    return 2;
+  };
+
+  return [...docs].sort((a, b) => {
+    const typeA = typeOrder(a.type);
+    const typeB = typeOrder(b.type);
+    if (typeA !== typeB) return typeA - typeB;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 router.post("/", async (req: Request, res: Response) => {
   const startTime = Date.now();
   console.log(
@@ -119,7 +140,9 @@ router.post("/", async (req: Request, res: Response) => {
       });
     }
 
-    const docSummary = buildDocumentsSummary(documents);
+    // TASK A: Ordina documenti in modo deterministico prima di costruire il prompt
+    const sortedDocuments = sortDocumentsDeterministic(documents);
+    const docSummary = buildDocumentsSummary(sortedDocuments);
 
     const userPrompt = `BANDO: ${tenderId}
 
