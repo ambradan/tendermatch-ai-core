@@ -7,6 +7,11 @@ import {
   DEFAULT_MAX_TOKENS,
   DEFAULT_TEMPERATURE,
 } from "../services/anthropicClient";
+import {
+  buildScorecard,
+  buildDegradedScorecard,
+} from "../services/scoring";
+import { RawChecksOutput, Scorecard } from "../types/scorecard";
 
 const router = Router();
 
@@ -33,10 +38,63 @@ function buildDocumentsSummary(docs: ComplianceDocument[]): string {
     .join("\n\n");
 }
 
+// ============================================================
+// PROMPT TEMPLATES
+// ============================================================
+
+const SYSTEM_PROMPT_CHECKS = `Sei TenderMatch AI Compliance Engine, modulo di verifica conformità documentale.
+
+REGOLE ASSOLUTE:
+1. NON generare MAI numeri di scoring (vietati "36/100", "80%", percentuali, punteggi)
+2. Genera SOLO check discreti con status: PASS | PARTIAL | FAIL | ND
+3. Per ogni check fornisci evidence (snippet dal documento) e rationale (breve motivazione)
+4. Se non hai dati sufficienti per valutare, usa ND
+
+Rispondi SOLO con un JSON valido con questa struttura:
+{
+  "sections": [
+    {
+      "section_id": "requisiti_amministrativi",
+      "section_name": "Requisiti Amministrativi",
+      "checks": [
+        {
+          "id": "check_1",
+          "label": "Documento DURC presente",
+          "status": "PASS" | "PARTIAL" | "FAIL" | "ND",
+          "evidence": "snippet dal documento...",
+          "rationale": "motivazione breve"
+        }
+      ]
+    }
+  ]
+}
+
+Le sezioni da valutare per compliance documentale sono:
+- requisiti_amministrativi: DURC, visura camerale, casellario giudiziale, antimafia
+- requisiti_tecnici: CV referenti, attestazioni esperienza, portfolio progetti
+- requisiti_economici: bilanci, referenze bancarie, dichiarazioni fatturato
+- documentazione_generale: domanda partecipazione, dichiarazioni sostitutive, firme digitali
+- certificazioni: ISO 9001, ISO 27001, SOA, certificazioni settoriali`;
+
+const SYSTEM_PROMPT_REPORT = `Sei TenderMatch AI Compliance Engine, modulo di verifica conformità documentale.
+
+Genera un report in formato markdown chiaro e strutturato che includa:
+1. Sintesi della documentazione analizzata
+2. Requisiti di compliance coperti
+3. Gap documentali identificati
+4. Elementi critici o mancanti
+5. Raccomandazioni operative prioritizzate
+
+NON includere punteggi numerici nel report (verranno calcolati separatamente).`;
+
+// ============================================================
+// ROUTE HANDLER
+// ============================================================
+
 router.post("/", async (req: Request, res: Response) => {
   const startTime = Date.now();
   console.log(
-    `[${new Date().toISOString()}] POST /api/ai-compliance-check - Inizio elaborazione`
+    `[${new Date().toISOString()}] POST /api/ai-compliance-check - tenderId: ${req.body?.tenderId || "N/A"}`
   );
 
   try {
@@ -46,7 +104,7 @@ router.post("/", async (req: Request, res: Response) => {
       language = "italiano",
     } = req.body as ComplianceCheckRequest;
 
-    // ✅ Validazioni base
+    // Validazioni base
     if (!tenderId || !documents || !Array.isArray(documents) || !documents.length) {
       return res.status(400).json({
         ok: false,
@@ -57,87 +115,75 @@ router.post("/", async (req: Request, res: Response) => {
 
     const docSummary = buildDocumentsSummary(documents);
 
-    // 🔧 SYSTEM PROMPT
-    const systemPrompt = `
-Sei TenderMatch AI Compliance Engine. Valuti la conformità documentale ai requisiti di gara.
-
-DEVI restituire PRIMA un JSON valido con questa struttura ESATTA:
-
-{
-  "score": number,               // da 0 a 100
-  "risk": "LOW" | "MEDIUM" | "HIGH",
-  "summary": "breve riassunto (5–7 righe)",
-  "details": "testo markdown dettagliato"
-}
-
-Dopo il JSON puoi aggiungere testo libero se necessario.
-Rispondi sempre in ${language}.
-`;
-
-    // 🔧 USER PROMPT
-    const userPrompt = `
-BANDO: ${tenderId}
+    const userPromptBase = `BANDO: ${tenderId}
 
 DOCUMENTI PRESENTATI:
 ${docSummary}
 
-1. Analizza la conformità documentale rispetto a un bando tipico per la Pubblica Amministrazione italiana.
-2. Assegna uno score tra 0 e 100, dove:
-   - 0 = documentazione del tutto insufficiente
-   - 100 = documentazione perfettamente allineata
-3. Classifica il rischio complessivo come LOW, MEDIUM o HIGH.
-4. Restituisci per PRIMO il JSON richiesto nel system prompt.
-5. Dopo il JSON includi il testo completo e dettagliato (in markdown) con:
-   - requisiti coperti
-   - gap documentali
-   - raccomandazioni operative.
-`;
+---
 
-    // 🧠 Chiamata ad Anthropic
-    const response = await anthropicClient.messages.create({
+Rispondi in ${language}.`;
+
+    // ============================================================
+    // CALL 1: Genera raw checks (JSON strutturato)
+    // ============================================================
+    let rawChecks: RawChecksOutput | null = null;
+    let scorecard: Scorecard;
+
+    try {
+      const checksResponse = await anthropicClient.messages.create({
+        model: MODEL,
+        max_tokens: DEFAULT_MAX_TOKENS,
+        temperature: DEFAULT_TEMPERATURE,
+        system: SYSTEM_PROMPT_CHECKS,
+        messages: [
+          {
+            role: "user",
+            content: userPromptBase + "\n\nGenera i check di compliance strutturati.",
+          },
+        ],
+      });
+
+      const checksText =
+        checksResponse.content.find((b) => b.type === "text")?.text ?? "";
+
+      // Parsing JSON (cerca il primo { ... } valido)
+      const jsonMatch = checksText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        rawChecks = JSON.parse(jsonMatch[0]) as RawChecksOutput;
+        scorecard = buildScorecard(rawChecks);
+      } else {
+        console.warn(
+          `[${new Date().toISOString()}] ai-compliance - Nessun JSON trovato nei checks`
+        );
+        scorecard = buildDegradedScorecard("Nessun JSON valido nell'output LLM");
+      }
+    } catch (parseErr) {
+      console.warn(
+        `[${new Date().toISOString()}] ai-compliance - Errore parsing checks:`,
+        parseErr instanceof Error ? parseErr.message : parseErr
+      );
+      scorecard = buildDegradedScorecard("Errore parsing output LLM");
+    }
+
+    // ============================================================
+    // CALL 2: Genera report markdown
+    // ============================================================
+    const reportResponse = await anthropicClient.messages.create({
       model: MODEL,
       max_tokens: DEFAULT_MAX_TOKENS,
       temperature: DEFAULT_TEMPERATURE,
-      system: systemPrompt,
+      system: SYSTEM_PROMPT_REPORT + `\nRispondi in ${language}.`,
       messages: [
         {
           role: "user",
-          content: userPrompt,
+          content: userPromptBase,
         },
       ],
     });
 
-    const textBlock: any = response.content.find(
-      (block: any) => block.type === "text"
-    );
-    const fullText: string = textBlock?.text ?? "";
-
-    // 🧩 Proviamo a estrarre il JSON iniziale
-    let score: number | null = null;
-    let risk: string | null = null;
-    let summary = "";
-    let details = fullText;
-
-    try {
-      const jsonMatch = fullText.match(/\{[\s\S]*?\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        score = typeof parsed.score === "number" ? parsed.score : null;
-        risk = typeof parsed.risk === "string" ? parsed.risk : null;
-        summary = typeof parsed.summary === "string" ? parsed.summary : "";
-        details =
-          typeof parsed.details === "string" && parsed.details.length > 0
-            ? parsed.details
-            : fullText;
-      }
-    } catch (e) {
-      console.warn(
-        `[${new Date().toISOString()}] AI Compliance - Errore nel parsing del JSON:`,
-        e instanceof Error ? e.message : e
-      );
-      // In caso di errore teniamo comunque fullText in details
-      details = fullText;
-    }
+    const reportMarkdown =
+      reportResponse.content.find((b) => b.type === "text")?.text ?? "";
 
     const duration = Date.now() - startTime;
     console.log(
@@ -146,11 +192,8 @@ ${docSummary}
 
     return res.json({
       ok: true,
-      score,
-      risk,
-      summary,
-      details,
-      raw: fullText,
+      data: reportMarkdown,
+      scorecard,
     });
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -165,6 +208,7 @@ ${docSummary}
         error instanceof Error
           ? error.message
           : "Errore durante l'elaborazione della richiesta",
+      scorecard: buildDegradedScorecard("Errore di sistema"),
     });
   }
 });
