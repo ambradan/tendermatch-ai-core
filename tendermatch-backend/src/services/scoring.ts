@@ -1,212 +1,217 @@
-// tendermatch-backend/src/services/scoring.ts
-// Deterministic Scoring Engine v1
+// Scoring Engine v1 - Deterministic Compliance Scoring
+// UNICA fonte di verità per i punteggi
 
 import {
-  CheckStatus,
-  RawChecksOutput,
-  Scorecard,
-  ScorecardSection,
-  ScorecardMeta,
-} from "../types/scorecard";
+  ComplianceResult,
+  ComplianceCheck,
+  ComplianceSection,
+  ComplianceOverall,
+  ComplianceScorecardV1,
+  ComplianceScorecardMeta,
+} from "../types/complianceScorecard";
 
 // ============================================================
-// FORMULA VERSION & WEIGHTS
+// CONSTANTS
 // ============================================================
 
-export const SCHEMA_VERSION = "1.0.0";
-export const FORMULA_VERSION = "v1-weighted-avg";
+export const SCHEMA_VERSION = "compliance-scorecard-v1" as const;
+export const FORMULA_VERSION = "score-formula-v1";
 
 /**
- * Pesi per sezione (somma = 1.0)
- * Modificare qui per cambiare l'importanza relativa
+ * Mapping check result → valore numerico
+ * ND è escluso (null)
  */
-export const SECTION_WEIGHTS: Record<string, number> = {
-  requisiti_amministrativi: 0.25,
-  requisiti_tecnici: 0.30,
-  requisiti_economici: 0.20,
-  documentazione_generale: 0.15,
-  certificazioni: 0.10,
-};
-
-/**
- * Mapping status → punteggio (0-100)
- * ND => null (non contribuisce alla media)
- */
-const STATUS_SCORE: Record<CheckStatus, number | null> = {
-  PASS: 100,
-  PARTIAL: 50,
-  FAIL: 0,
+const RESULT_VALUE: Record<ComplianceResult, number | null> = {
+  PASS: 1.0,
+  PARTIAL: 0.5,
+  FAIL: 0.0,
   ND: null,
 };
 
 // ============================================================
-// SCORING FUNCTIONS
+// SECTION SCORING
 // ============================================================
 
-/**
- * Calcola lo score di una sezione dalla lista di checks
- * Se tutti ND → null
- * Altrimenti media dei check valutabili
- */
-export function computeSectionScore(
-  checks: Array<{ status: CheckStatus }>
-): number | null {
-  const validScores: number[] = [];
+interface SectionInput {
+  id: string;
+  label: string;
+  checks: ComplianceCheck[];
+}
 
-  for (const check of checks) {
-    const s = STATUS_SCORE[check.status];
-    if (s !== null) {
-      validScores.push(s);
-    }
-  }
-
-  if (validScores.length === 0) {
-    return null; // tutti ND
-  }
-
-  const avg = validScores.reduce((a, b) => a + b, 0) / validScores.length;
-  return Math.round(avg);
+interface SectionScoreOutput {
+  status: ComplianceResult;
+  score: number | null;
+  raw: number | null;
 }
 
 /**
- * Calcola overall score con media pesata
- * Sezioni con score null vengono escluse e i pesi ridistribuiti
+ * Calcola status da raw score (0–1)
  */
-export function computeOverallScore(
-  sections: ScorecardSection[]
-): number | null {
+function statusFromRaw(raw: number): ComplianceResult {
+  const percent = raw * 100;
+  if (percent >= 80) return "PASS";
+  if (percent >= 50) return "PARTIAL";
+  return "FAIL";
+}
+
+/**
+ * Calcola score di una sezione dai suoi checks
+ * - Se tutti ND → status "ND", score null
+ * - Altrimenti: raw = media valori, score = round(raw * 100)
+ */
+export function scoreSection(checks: ComplianceCheck[]): SectionScoreOutput {
+  const values: number[] = [];
+
+  for (const check of checks) {
+    const val = RESULT_VALUE[check.result];
+    if (val !== null) {
+      values.push(val);
+    }
+  }
+
+  // Tutti ND
+  if (values.length === 0) {
+    return { status: "ND", score: null, raw: null };
+  }
+
+  const raw = values.reduce((a, b) => a + b, 0) / values.length;
+  const score = Math.round(raw * 100);
+  const status = statusFromRaw(raw);
+
+  return { status, score, raw };
+}
+
+/**
+ * Costruisce una ComplianceSection completa
+ */
+export function buildSection(input: SectionInput): ComplianceSection {
+  const { status, score, raw } = scoreSection(input.checks);
+
+  return {
+    id: input.id,
+    label: input.label,
+    checks: input.checks,
+    status,
+    score,
+    raw,
+  };
+}
+
+// ============================================================
+// OVERALL SCORING
+// ============================================================
+
+interface OverallInput {
+  sections: ComplianceSection[];
+  weights: Record<string, number>;
+}
+
+/**
+ * Calcola score overall con media pesata
+ * - Solo sezioni con score !== null
+ * - Se nessuna valida o somma pesi = 0 → ND, score null
+ */
+export function scoreOverall(input: OverallInput): ComplianceOverall {
+  const { sections, weights } = input;
+
   let weightedSum = 0;
   let totalWeight = 0;
 
   for (const section of sections) {
-    if (section.score === null) continue;
+    if (section.raw === null) continue;
 
-    const weight = SECTION_WEIGHTS[section.section_id] ?? 0.1; // fallback weight
-    weightedSum += section.score * weight;
+    const weight = weights[section.id] ?? 0;
+    if (weight <= 0) continue;
+
+    weightedSum += section.raw * weight;
     totalWeight += weight;
   }
 
+  // Nessuna sezione valida
   if (totalWeight === 0) {
-    return null; // tutte le sezioni ND
+    return { status: "ND", score: null, raw: null };
   }
 
-  // Normalizza per i pesi effettivamente usati
-  return Math.round(weightedSum / totalWeight);
-}
+  const raw = weightedSum / totalWeight;
+  const score = Math.round(raw * 100);
+  const status = statusFromRaw(raw);
 
-/**
- * Determina risk level dallo score
- * null → ND
- */
-export function computeRiskLevel(
-  score: number | null
-): "LOW" | "MEDIUM" | "HIGH" | "ND" {
-  if (score === null) return "ND";
-  if (score >= 70) return "LOW";
-  if (score >= 40) return "MEDIUM";
-  return "HIGH";
-}
-
-/**
- * Determina confidence dalla % di check valutabili
- */
-export function computeConfidence(
-  sections: ScorecardSection[]
-): "HIGH" | "MEDIUM" | "LOW" | "ND" {
-  let totalChecks = 0;
-  let ndChecks = 0;
-
-  for (const section of sections) {
-    for (const check of section.checks) {
-      totalChecks++;
-      if (check.status === "ND") ndChecks++;
-    }
-  }
-
-  if (totalChecks === 0) return "ND";
-
-  const ndRatio = ndChecks / totalChecks;
-  if (ndRatio >= 0.5) return "LOW";
-  if (ndRatio >= 0.2) return "MEDIUM";
-  return "HIGH";
+  return { status, score, raw };
 }
 
 // ============================================================
 // MAIN BUILDER
 // ============================================================
 
+interface ComplianceInput {
+  sections: SectionInput[];
+  weights: Record<string, number>;
+}
+
 /**
- * Costruisce Scorecard completa da RawChecksOutput
+ * Costruisce Compliance Scorecard v1 completa
+ * Entry point principale per lo scoring
  */
-export function buildScorecard(raw: RawChecksOutput): Scorecard {
-  const sections: ScorecardSection[] = raw.sections.map((sec) => ({
-    section_id: sec.section_id,
-    section_name: sec.section_name,
-    checks: sec.checks.map((c) => ({
-      id: c.id,
-      label: c.label,
-      status: c.status,
-      evidence: c.evidence,
-      rationale: c.rationale,
-    })),
-    score: computeSectionScore(sec.checks),
-  }));
+export function scoreCompliance(input: ComplianceInput): ComplianceScorecardV1 {
+  // Build sections with scores
+  const sections = input.sections.map(buildSection);
 
-  const overall_score = computeOverallScore(sections);
-  const risk_level = computeRiskLevel(overall_score);
-  const confidence = computeConfidence(sections);
+  // Calculate overall
+  const overall = scoreOverall({ sections, weights: input.weights });
 
-  const meta: ScorecardMeta = {
+  // Build meta
+  const meta: ComplianceScorecardMeta = {
     schema_version: SCHEMA_VERSION,
     formula_version: FORMULA_VERSION,
-    weights: { ...SECTION_WEIGHTS },
-    confidence,
-    determinism_mode: "STRICT",
+    determinism_mode: "locked",
     generated_at: new Date().toISOString(),
   };
 
   return {
-    meta,
     sections,
-    overall_score,
-    risk_level,
+    overall,
+    weights: { ...input.weights },
+    meta,
   };
 }
 
+// ============================================================
+// DEGRADED SCORECARD (fallback per errori parsing)
+// ============================================================
+
 /**
- * Crea una Scorecard degradata (tutti ND) per fallback
+ * Crea scorecard degradata quando parsing LLM fallisce
+ * Tutti ND, nessun score numerico
  */
-export function buildDegradedScorecard(reason?: string): Scorecard {
-  const meta: ScorecardMeta = {
+export function buildDegradedScorecard(reason?: string): ComplianceScorecardV1 {
+  const meta: ComplianceScorecardMeta = {
     schema_version: SCHEMA_VERSION,
     formula_version: FORMULA_VERSION,
-    weights: { ...SECTION_WEIGHTS },
-    confidence: "ND",
-    determinism_mode: "STRICT",
+    determinism_mode: "locked",
     generated_at: new Date().toISOString(),
   };
 
-  // Sezione placeholder
-  const sections: ScorecardSection[] = [
+  const sections: ComplianceSection[] = [
     {
-      section_id: "parsing_failed",
-      section_name: "Analisi non completata",
+      id: "parse_error",
+      label: reason || "Analisi non completata",
       checks: [
         {
-          id: "parse_error",
-          label: reason || "Output LLM non validabile",
-          status: "ND",
-          rationale: "Impossibile estrarre checks strutturati",
+          id: "llm_output_invalid",
+          result: "ND",
+          rationale: "Output LLM non validabile",
         },
       ],
+      status: "ND",
       score: null,
+      raw: null,
     },
   ];
 
   return {
-    meta,
     sections,
-    overall_score: null,
-    risk_level: "ND",
+    overall: { status: "ND", score: null, raw: null },
+    weights: {},
+    meta,
   };
 }
