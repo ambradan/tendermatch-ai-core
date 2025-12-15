@@ -34,5 +34,5 @@ whenever possible.
 ### Documentation
 
 - System architecture and design decisions: [ARCHITECTURE.md](./ARCHITECTURE.md)
-- API behavior and output contracts: [README.md] (./README.md)
+- API behavior and output contracts: [README.md](./README.md)
 - Forward-looking technical direction: [TECHNICAL ROADMAP.md](./ROADMAP.md)
