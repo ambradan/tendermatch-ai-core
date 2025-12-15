@@ -232,6 +232,14 @@ if (result.ok) {
 
 ---
 
+## 🔒 AI Output Contract
+
+Questo backend produce output AI secondo un contratto formale e vincolante.
+
+👉 Vedi: [AI Output Contract – Compliance Scorecard v1](./README_AI_OUTPUT_CONTRACT.md)
+
+---
+
 ## 🔒 Sicurezza
 
 - **API Key**: mai loggata, mai esposta
