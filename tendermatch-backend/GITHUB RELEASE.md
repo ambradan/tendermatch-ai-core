@@ -30,3 +30,9 @@ auditability, and security rather than feature completeness.
 
 Future changes will preserve backward compatibility at the contract level
 whenever possible.
+
+### Documentation
+
+- System architecture and design decisions: `ARCHITECTURE.md`
+- API behavior and output contracts: `README.md`
+- Forward-looking technical direction: `TECHNICAL ROADMAP.md`
